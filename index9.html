@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive 3D Viewer with Hierarchy</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+        }
+        #sidebar {
+            width: 250px;
+            background-color: #333;
+            color: white;
+            padding: 10px;
+            font-family: Arial, sans-serif;
+            overflow-y: auto;
+            border-right: 1px solid #444;
+        }
+        #sidebar ul {
+            list-style: none;
+            padding: 0;
+        }
+        #sidebar li {
+            cursor: pointer;
+            padding: 5px;
+            margin: 2px 0;
+            background-color: #444;
+            border-radius: 5px;
+        }
+        #sidebar li:hover {
+            background-color: #555;
+        }
+        #sidebar li.selected {
+            background-color: #00ff00;
+        }
+        canvas {
+            flex: 1;
+            display: block;
+        }
+        .info-box {
+            position: absolute;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            pointer-events: none;
+            z-index: 1000;
+            display: none;
+            max-width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar for Hierarchical List -->
+    <div id="sidebar">
+        <h3>Object Hierarchy</h3>
+        <ul id="hierarchyList"></ul>
+    </div>
+
+    <!-- Name and Description Boxes -->
+    <div id="nameBox" class="info-box"></div>
+    <div id="descriptionBox" class="info-box"></div>
+
+    <script>
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x2d2d2d);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth - 250, window.innerHeight); // Subtract sidebar width
+        document.body.appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(5, 5, 5);
+        scene.add(ambientLight, directionalLight);
+
+        // OrbitControls
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // Name and Description Boxes
+        const nameBox = document.getElementById('nameBox');
+        const descriptionBox = document.getElementById('descriptionBox');
+
+        // Sidebar and hierarchy list
+        const hierarchyList = document.getElementById('hierarchyList');
+
+        // Raycaster setup
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        let selectedObject = null;
+
+        // Default Descriptions Map
+        const defaultDescriptions = {
+            17: {
+                name: "os_ilium_left",
+                description: "The left ilium is the largest and most cranial part of the pelvic bone, forming the hip's upper region.",
+            },
+            18: {
+                name: "os_ilium_right",
+                description: "The right ilium is the largest and most cranial part of the pelvic bone, forming the hip's upper region.",
+            },
+            19: {
+                name: "os_ischi_left",
+                description: "The left ischium forms the lower and caudal portion of the pelvic bone, contributing to the sit bones.",
+            },
+            20: {
+                name: "os_ischi_right",
+                description: "The right ischium forms the lower and caudal portion of the pelvic bone, contributing to the sit bones.",
+            },
+            21: {
+                name: "os_pubis_left",
+                description: "The left pubis is the ventral and anterior part of the pelvic bone, contributing to the pelvic floor.",
+            },
+            22: {
+                name: "os_pubis_right",
+                description: "The right pubis is the ventral and anterior part of the pelvic bone, contributing to the pelvic floor.",
+            },
+        };
+
+        // Function to populate hierarchy list
+        function populateHierarchyList(object) {
+            hierarchyList.innerHTML = ''; // Clear the list first
+            object.traverse((child) => {
+                if (child.isMesh) {
+                    const li = document.createElement('li');
+                    li.textContent = child.name || `Unnamed Object ${child.id}`; // Show only the name
+                    li.onclick = () => selectObject(child);
+                    hierarchyList.appendChild(li);
+                    child.userData.listItem = li; // Save reference to the list item
+                }
+            });
+        }
+
+        // Function to smoothly move the camera and controls to a target
+        function flyTo(target) {
+            const from = { x: controls.target.x, y: controls.target.y, z: controls.target.z };
+            const to = { x: target.x, y: target.y, z: target.z };
+
+            new TWEEN.Tween(from)
+                .to(to, 1000) // Duration: 1 second
+                .easing(TWEEN.Easing.Quadratic.Out)
+                .onUpdate(() => {
+                    controls.target.set(from.x, from.y, from.z);
+                    controls.update();
+                })
+                .start();
+        }
+
+        // Function to show name and description boxes
+        function showInfoBoxes(object) {
+            if (!object) {
+                nameBox.style.display = 'none';
+                descriptionBox.style.display = 'none';
+                return;
+            }
+
+            nameBox.textContent = `Name: ${object.name || 'Unnamed Object'}`;
+            descriptionBox.textContent = `Description: ${object.userData.description || 'No description available.'}`;
+
+            const objectCenter = new THREE.Vector3();
+            new THREE.Box3().setFromObject(object).getCenter(objectCenter);
+            const screenPosition = objectCenter.clone().project(camera);
+
+            const x = (screenPosition.x * 0.5 + 0.5) * window.innerWidth;
+            const y = (1 - (screenPosition.y * 0.5 + 0.5)) * window.innerHeight;
+
+            nameBox.style.left = `${x}px`;
+            nameBox.style.top = `${y - 50}px`; // Above the object
+            nameBox.style.display = 'block';
+
+            descriptionBox.style.left = `${x}px`;
+            descriptionBox.style.top = `${y}px`; // Below the name box
+            descriptionBox.style.display = 'block';
+        }
+
+        // Function to select an object
+        function selectObject(object) {
+            if (selectedObject) {
+                selectedObject.material.color.set(0xffffff);
+                selectedObject.userData.listItem.classList.remove('selected');
+            }
+
+            selectedObject = object;
+            selectedObject.material = selectedObject.material.clone();
+            selectedObject.material.color.set(0x00ff00);
+            object.userData.listItem.classList.add('selected');
+
+            const objectCenter = new THREE.Vector3();
+            new THREE.Box3().setFromObject(object).getCenter(objectCenter);
+            flyTo(objectCenter); // Smooth movement to the object
+
+            showInfoBoxes(object);
+        }
+
+        // Load the model
+        const loader = new THREE.GLTFLoader();
+        loader.load(
+    'https://raw.githubusercontent.com/ArtursVETVR/VETVR-model-viewer-v1/main/ImageToStl.com_full%20hip.glb',
+    (gltf) => {
+        const model = gltf.scene;
+        scene.add(model);
+
+        // Compute bounding box and center the model
+        const box = new THREE.Box3().setFromObject(model);
+        const center = new THREE.Vector3();
+        const size = new THREE.Vector3();
+        box.getCenter(center);
+        box.getSize(size);
+
+        // Adjust the model's position to center it
+        model.position.sub(center);
+
+        // Set the camera farther away from the model
+        const maxDimension = Math.max(size.x, size.y, size.z);
+        const distance = maxDimension * 2; // Adjust this multiplier to control zoom level
+        camera.position.set(0, maxDimension / 2, distance);
+        controls.target.set(0, 0, 0);
+        controls.update();
+
+        // Assign default descriptions to objects
+        model.traverse((child) => {
+            if (child.isMesh) {
+                const data = defaultDescriptions[child.id];
+                if (data) {
+                    child.name = data.name;
+                    child.userData.description = data.description;
+                }
+            }
+        });
+
+        populateHierarchyList(model);
+    },
+    undefined,
+    (error) => console.error('Error loading model:', error)
+);
+
+        // Event listener for mouse clicks
+        window.addEventListener('click', (event) => {
+            if (event.target.closest('#sidebar')) return;
+
+            mouse.x = ((event.clientX - 250) / (window.innerWidth - 250)) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(scene.children, true);
+
+            if (intersects.length > 0) {
+                selectObject(intersects[0].object);
+            } else {
+                showInfoBoxes(null);
+            }
+        });
+
+        // Handle window resizing
+        window.addEventListener('resize', () => {
+            camera.aspect = (window.innerWidth - 250) / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth - 250, window.innerHeight);
+        });
+
+        // Render loop
+        function animate() {
+            requestAnimationFrame(animate);
+            TWEEN.update();
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+</html>
